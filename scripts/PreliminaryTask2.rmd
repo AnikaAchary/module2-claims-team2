@@ -1,0 +1,104 @@
+---
+title: "Preliminary Task 2"
+author: "Ryan Chang"
+date: "2026-11-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(tidytext)
+library(quanteda)
+library(here)
+library(tokenizers)
+library(stopwords)
+library(textstem)
+
+
+load(here("data", "claims-clean-example.RData"), verbose = TRUE)
+```
+
+
+```{r}
+
+stopwrd <- stopwords::stopwords("en") %>% 
+  str_remove_all("[[:punct:]]")
+
+unigrams <- claims_clean %>%
+  select(.id, text_clean) %>%
+  unnest_tokens(output = token, input = text_clean, token = "words") %>%
+  filter(!token %in% stopwrd, !str_detect(token, "^[0-9]+$")) %>%
+  mutate(token = lemmatize_words(token))
+
+unigram_dfmat <- unigrams %>%
+  count(.id, token) %>%
+  cast_dfm(.id, token, n) %>%
+  dfm_trim(min_termfreq = 5)
+
+pca_mat <- convert(unigram_dfmat, to = "matrix")
+pca_unigram <- prcomp(pca_mat, scale. = TRUE)
+
+```
+
+
+```{r}
+k_unigram = 20
+scores_unigram <- pca_unigram$x[, 1:k_unigram]
+
+stage1_df = data.frame(.id = rownames(scores_unigram)) %>%
+  left_join(claims_clean %>% select(.id, bclass), by = ".id") %>%
+  bind_cols(as.data.frame(scores_unigram)) %>%
+  mutate(bclass = factor(bclass))
+
+stage1_model <- glm(bclass ~ . - .id, data = stage1_df, family = binomial)
+stage1_df$log_odds_stage1 <- predict(stage1_model, type = "link")
+
+summary(stage1_model)
+```
+
+
+```{r}
+bigrams <- claims_clean %>%
+  select(.id, text_clean) %>%
+  mutate(bigram = tokenize_ngrams(text_clean, 2)) %>%
+  unnest(bigram) %>%
+  drop_na(bigram) %>%
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  mutate(word1 = lemmatize_words(word1),
+         word2 = lemmatize_words(word2)) %>%
+  filter(!word1 %in% stopwrd, 
+         !word2 %in% stopwrd,
+         !str_detect(word1, "^[0-9]+$"), 
+         !str_detect(word2, "^[0-9]+$")) %>%
+  unite(token, word1, word2, sep = " ")
+
+bigram_dfmat <- bigrams %>%
+  count(.id, token) %>%
+  cast_dfm(.id, token, n) %>%
+  dfm_trim(min_termfreq = 5)
+
+pca_bi_mat <- convert(bigram_dfmat, to = "matrix")
+pca_bi <- prcomp(pca_bi_mat, scale. = TRUE)
+
+
+```
+
+```{r}
+k_bi <- 20
+scores_bi <- pca_bi$x[, 1:k_bi]
+colnames(scores_bi) <- paste0("PC_bi_", 1:k_bi)
+
+stage2_df <- as.data.frame(scores_bi) %>%
+  rownames_to_column(var = ".id") %>%
+  inner_join(stage1_df %>% select(.id, bclass, log_odds_stage1), by = ".id") 
+
+
+stage2_model <- glm(bclass ~ . - .id, data = stage2_df, family = binomial)
+summary(stage2_model)
+```
+
+According to the output of my model, the bigrams seem to capture a significant amount of additional information about the claim status of a webpage compared to what is explained by unigrams. This can be shown by the 8 out of 20 bigram principal components that are statistically significant at alpha level 0.05. Most of these components are also much less than 0.05, making them highly significant components. Also, the log_odds_stage1 is 0.882, meaning that the bigrams contained new information compared to just the unigrams, showing that bigrams contain valuable information and context that unigrams cannot match.
