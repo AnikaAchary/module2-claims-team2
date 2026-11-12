@@ -8,6 +8,7 @@ library(qdapRegex)
 library(Matrix)
 library(sparsesvd)
 library(glmnet)
+library(e1071) # for the SVM
 
 source('scripts/preprocessing.R')          # starter file, left in place
 source('scripts/projection-functions.R')   # in-class projection_fn(), reproject_fn()
@@ -97,7 +98,7 @@ results_p2 %>%
 
 ## =====================================================================
 ## PROGRESS SO FAR (task 4a, binary model)
-## =====================================================================
+
 ## PHASE 1: headers (done, see scripts/task4/headers-test.R)
 ##   - Cleaned pages two ways: paragraphs only vs paragraphs + headers (h1-h6)
 ##   - Headers cut blank pages from 168 to 41 (median words 223 -> 281)
@@ -113,4 +114,130 @@ results_p2 %>%
 ##   - Neural net skipped (Keras setup issues)
 ##   - Next: bigrams + lasso, then optional non-linear SVM
 ## =====================================================================
+
+
+## BIGRAMS -----------------------------------------------------------------
+
+# cleaned text with headers, from Phase 1 (gives claims_p and claims_ph)
+load('data/claims-clean-headers-test.RData')
+
+bigram_fn <- function(.df, min_docs = 10){
+  stops <- str_remove_all(stop_words$word, '[[:punct:]]')
+  
+  # pairs of neighboring words, stop words and short words removed, then lemmatized
+  bigrams <- .df %>%
+    select(.id, bclass, text_clean) %>%
+    unnest_tokens(output = bigram, input = text_clean, token = 'ngrams', n = 2) %>%
+    filter(!is.na(bigram)) %>%
+    separate(bigram, into = c('w1', 'w2'), sep = ' ') %>%
+    filter(!w1 %in% stops, !w2 %in% stops,
+           str_length(w1) > 2, str_length(w2) > 2) %>%
+    mutate(token.lem = paste('bg', lemmatize_words(w1), lemmatize_words(w2), sep = '_')) %>%
+    count(.id, bclass, token.lem, name = 'n')
+  
+  # keep bigrams that appear on at least min_docs pages
+  keep <- bigrams %>%
+    count(token.lem, name = 'docs') %>%
+    filter(docs >= min_docs) %>%
+    pull(token.lem)
+  
+  # TF-IDF, one row per page, one column per bigram
+  tfidf <- bigrams %>%
+    filter(token.lem %in% keep) %>%
+    bind_tf_idf(term = token.lem, document = .id, n = n) %>%
+    pivot_wider(id_cols = c('.id', 'bclass'),
+                names_from = 'token.lem',
+                values_from = 'tf_idf',
+                values_fill = 0)
+  
+  # pages with no kept bigrams become rows of zeros
+  blanks <- .df %>%
+    filter(!.id %in% tfidf$.id) %>%
+    select(.id, bclass)
+  
+  bind_rows(tfidf, blanks) %>%
+    mutate(across(-c(.id, bclass), ~ replace_na(.x, 0)))
+}
+
+bigrams_ph <- bigram_fn(claims_ph)
+save(bigrams_ph, file = 'data/tfidf-bigrams.RData')
+
+# words + bigrams side by side, one row per page
+tfidf_wb <- tfidf %>%
+  inner_join(select(bigrams_ph, -bclass), by = '.id')
+
+dim(bigrams_ph)   # expect 2140 rows
+dim(tfidf_wb)     # expect 2140 rows, words + bigram columns
+
+
+res_lasso_bg <- evaluate(fit_enet, tfidf_wb, alpha = 1) %>%
+  mutate(model = 'glmnet lasso + bigrams')
+
+results_p2 <- bind_rows(results_p2, res_lasso_bg)
+save(results_p2, file = 'results/binary-comparison.RData')
+
+results_p2 %>%
+  group_by(model, .metric) %>%
+  summarise(mean = mean(.estimate), sd = sd(.estimate), .groups = 'drop') %>%
+  pivot_wider(names_from = .metric, values_from = c(mean, sd))
+
+## RESULT (10 splits): bigrams add nothing
+##   lasso words only 0.805 (AUC 0.860) | lasso words + 1,562 bigrams 0.805 (AUC 0.859)
+## Bigrams that appear on 10+ pages carry no extra signal beyond single words.
+
+
+
+# install.packages('e1071')
+
+
+# SVM with a non-linear (RBF) kernel, fit on the PCA components
+fit_svm <- function(tfidf, train_ids, test_ids, prop = 0.7, cost = 1){
+  train <- tfidf %>% filter(.id %in% train_ids) %>% arrange(.id)
+  test  <- tfidf %>% filter(.id %in% test_ids)  %>% arrange(.id)
+  
+  # same projection as the baseline
+  proj_out <- projection_fn(.dtm = select(train, -.id, -bclass), .prop = prop)
+  x_train  <- as.matrix(proj_out$data)
+  x_test   <- as.matrix(reproject_fn(.dtm = select(test, -.id, -bclass), proj_out))
+  
+  # probability = TRUE so we get P(Relevant) for AUC
+  set.seed(102926)
+  fit <- svm(x = x_train, y = train$bclass, kernel = 'radial',
+             cost = cost, probability = TRUE)
+  
+  pr <- predict(fit, x_test, probability = TRUE)
+  p  <- attr(pr, 'probabilities')[, levels(train$bclass)[2]]
+  score(test$bclass, p)
+}
+
+
+res_svm1  <- evaluate(fit_svm, tfidf, cost = 1)  %>% mutate(model = 'SVM radial (cost 1)')
+res_svm10 <- evaluate(fit_svm, tfidf, cost = 10) %>% mutate(model = 'SVM radial (cost 10)')
+
+results_p2 <- bind_rows(results_p2, res_svm1, res_svm10)
+save(results_p2, file = 'results/binary-comparison.RData')
+
+results_p2 %>%
+  group_by(model, .metric) %>%
+  summarise(mean = mean(.estimate), sd = sd(.estimate), .groups = 'drop') %>%
+  pivot_wider(names_from = .metric, values_from = c(mean, sd))
+
+
+
+
+## RESULT (10 splits): SVM adds nothing
+##   SVM radial cost 1: 0.794 (AUC 0.862) | cost 10: 0.801 (AUC 0.862)
+##
+## PHASE 2 DECISION: glmnet lasso on word TF-IDF (headers included)
+##   accuracy 0.805, AUC 0.860, sens 0.798, spec 0.813
+##   All 7 models fell within ~1 pt of 80%; lasso ties for best accuracy,
+##   is balanced across classes, and is the simplest to deploy (no PCA).
+
+
+## FOR DELIVERABLE 2:
+## Seven models (PCA logistic regression, lasso, elastic net, ridge,
+## lasso with bigrams, and two RBF SVMs) all reached about 80% accuracy
+## over 10 splits; lasso logistic regression on word TF-IDF was chosen
+## (80.5% accuracy, 0.860 AUC).
+
 
