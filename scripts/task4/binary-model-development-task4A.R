@@ -241,3 +241,224 @@ results_p2 %>%
 ## (80.5% accuracy, 0.860 AUC).
 
 
+## FINAL PIPELINE -----------------------------------------------------------
+
+css_headers <- 'p, h1, h2, h3, h4, h5, h6'
+
+# clean EVERY page: HTML pages get cleaned, everything else gets empty text
+# parsed = FALSE marks pages that weren't HTML (they get a fallback label later)
+clean_pages <- function(.df, .css = css_headers){
+  .df %>%
+    mutate(parsed = str_detect(text_tmp, regex('<!|<html', ignore_case = TRUE))) %>%
+    rowwise() %>%
+    mutate(text_clean = if (parsed) {
+      tryCatch(parse_fn2(text_tmp, .css), error = function(e) '')
+    } else '') %>%
+    ungroup() %>%
+    mutate(text_clean = coalesce(text_clean, '')) %>%
+    select(-text_tmp)
+}
+
+load('data/claims-raw.RData')
+load('data/claims-test.RData')
+
+train_clean <- clean_pages(claims_raw) %>% select(.id, bclass, parsed, text_clean)
+test_clean  <- clean_pages(claims_test)
+
+save(train_clean, test_clean, file = 'data/final-clean.RData')
+
+
+
+# words -> lemmas -> counts per page (same steps as before)
+tokenize_pages <- function(.clean){
+  .clean %>%
+    select(.id, text_clean) %>%
+    unnest_tokens(output = token, input = text_clean, token = 'words',
+                  stopwords = str_remove_all(stop_words$word, '[[:punct:]]')) %>%
+    mutate(token.lem = lemmatize_words(token)) %>%
+    filter(str_length(token.lem) > 2) %>%
+    count(.id, token.lem, name = 'n')
+}
+
+# vocabulary + IDF weights, learned from training pages ONLY
+build_vocab <- function(tokens, n_pages, min_docs = 5){
+  tokens %>%
+    count(token.lem, name = 'docs') %>%
+    filter(docs >= min_docs) %>%
+    mutate(idf = log(n_pages / docs)) %>%
+    arrange(token.lem)
+}
+
+# TF-IDF matrix for ANY pages, using a saved vocabulary
+# rows follow `ids` exactly (blank pages = zero rows), columns follow the vocabulary
+make_dtm <- function(tokens, ids, vocab){
+  tf <- tokens %>%
+    filter(token.lem %in% vocab$token.lem) %>%
+    group_by(.id) %>%
+    mutate(tf = n / sum(n)) %>%
+    ungroup() %>%
+    left_join(select(vocab, token.lem, idf), by = 'token.lem') %>%
+    mutate(i = match(.id, ids), j = match(token.lem, vocab$token.lem)) %>%
+    filter(!is.na(i))
+  
+  sparseMatrix(i = tf$i, j = tf$j, x = tf$tf * tf$idf,
+               dims = c(length(ids), nrow(vocab)),
+               dimnames = list(ids, vocab$token.lem))
+}
+
+
+
+
+nrow(train_clean); nrow(test_clean)         # expect 2165 and 929
+sum(train_clean$parsed); sum(test_clean$parsed)   # expect 2146 and 921
+sum(train_clean$text_clean == '')           # blank training pages (incl. unparsed)
+sum(test_clean$text_clean == '')            # blank test pages
+
+# quick test of the feature functions
+tok   <- tokenize_pages(train_clean)
+vocab <- build_vocab(tok, n_pages = nrow(train_clean))
+x     <- make_dtm(tok, train_clean$.id, vocab)
+dim(x)                                      # expect 2165 rows, ~6,800 columns
+
+
+
+
+## HONEST CHECK: vocabulary from training pages only -------------------
+
+lv <- levels(train_clean$bclass)
+
+fit_lasso_final <- function(train_ids, test_ids){
+  tr <- train_clean %>% filter(.id %in% train_ids, parsed) %>% arrange(.id)   # train on HTML pages
+  te <- train_clean %>% filter(.id %in% test_ids) %>% arrange(.id)            # score every page
+  
+  tok_tr <- tok %>% filter(.id %in% tr$.id)
+  tok_te <- tok %>% filter(.id %in% te$.id)
+  
+  v    <- build_vocab(tok_tr, n_pages = nrow(tr))
+  x_tr <- make_dtm(tok_tr, tr$.id, v)
+  x_te <- make_dtm(tok_te, te$.id, v)
+  
+  set.seed(102926)
+  cv <- cv.glmnet(x = x_tr, y = tr$bclass, family = 'binomial', alpha = 1)
+  p  <- as.numeric(predict(cv, s = 'lambda.min', newx = x_te, type = 'response'))
+  p[!te$parsed] <- 0   # fallback: non-HTML pages -> N/A
+  
+  score(te$bclass, p)
+}
+
+honest <- map_dfr(1:10, function(s){
+  set.seed(s)
+  sp <- train_clean %>%
+    arrange(.id) %>%
+    select(.id, bclass) %>%
+    initial_split(prop = 0.8, strata = bclass)
+  fit_lasso_final(training(sp)$.id, testing(sp)$.id) %>% mutate(seed = s)
+})
+
+save(honest, file = 'results/bclass-honest-check.RData')
+
+honest %>%
+  group_by(.metric) %>%
+  summarise(mean = mean(.estimate), sd = sd(.estimate))
+
+
+
+## REFIT + SAVE (Deliverable 4) ----------------------------------------------
+
+train_fit   <- train_clean %>% filter(parsed) %>% arrange(.id)   # 2,146 HTML pages
+tok_fit     <- tok %>% filter(.id %in% train_fit$.id)
+vocab_final <- build_vocab(tok_fit, n_pages = nrow(train_fit))
+x_all       <- make_dtm(tok_fit, train_fit$.id, vocab_final)
+
+set.seed(102926)
+cv_final <- cv.glmnet(x = x_all, y = train_fit$bclass, family = 'binomial', alpha = 1)
+
+# everything needed to go from raw HTML to a label
+bclass_model <- list(
+  css       = css_headers,          # which HTML tags to read
+  vocab     = vocab_final,          # words + IDF weights
+  fit       = cv_final,             # lasso fit (with cross-validation)
+  lambda    = cv_final$lambda.min,  # chosen penalty
+  threshold = 0.5,
+  levels    = lv,                   # bclass factor levels, in order
+  fallback  = lv[1]                 # label for non-HTML pages: N/A
+)
+
+saveRDS(bclass_model, file = 'results/bclass-model.rds')
+file.size('results/bclass-model.rds') / 1e6   # MB, should be small
+
+
+
+## HONEST CHECK (10 splits, vocabulary from training pages only, N/A fallback):
+##   accuracy 0.806 (sd 0.015) | AUC 0.864 (0.016)
+##   sensitivity 0.788 (0.026) | specificity 0.826 (0.030)
+## Final model saved: results/bclass-model.rds (0.46 MB),
+##   lasso refit on all 2,146 HTML training pages
+
+## PREDICT ON TEST DATA (from the saved model) --------------------------------
+
+# raw HTML in, labels out, using only what is stored in the saved model
+predict_bclass <- function(model, .df){
+  cl <- clean_pages(.df, model$css)
+  tk <- tokenize_pages(cl)
+  x  <- make_dtm(tk, cl$.id, model$vocab)
+  
+  p   <- as.numeric(predict(model$fit, s = model$lambda, newx = x, type = 'response'))
+  lab <- if_else(p > model$threshold, model$levels[2], model$levels[1])
+  lab[!cl$parsed] <- model$fallback   # non-HTML pages -> N/A
+  
+  tibble(.id = cl$.id,
+         bclass.prob = p,
+         bclass.pred = factor(lab, levels = model$levels))
+}
+
+bclass_model <- readRDS('results/bclass-model.rds')   # load from disk, like the D4 script will
+bclass_test  <- predict_bclass(bclass_model, claims_test)
+
+save(bclass_test, file = 'results/bclass-test-preds.RData')
+
+
+nrow(bclass_test)                                         # expect 929
+setequal(bclass_test$.id, claims_test$.id)                # expect TRUE
+sum(is.na(bclass_test$bclass.pred))                       # expect 0
+identical(levels(bclass_test$bclass.pred), levels(claims_raw$bclass))   # expect TRUE
+table(bclass_test$bclass.pred)                            # rough split, expect ~45-55% each
+
+
+## PHASE 3 DONE: test predictions from the saved model
+##   929 rows, all test ids, no NAs, levels match claims_raw
+##   499 N/A (54%) / 430 Relevant (46%)
+##   saved: results/bclass-test-preds.RData
+
+
+
+
+
+
+## =====================================================================
+## PROGRESS (task 4a, binary model)
+## =====================================================================
+## PHASE 1: headers (done, scripts/task4/headers-test.R)
+##   - Paragraphs + headers vs paragraphs only, 10 splits
+##   - Same accuracy, better AUC (0.864 vs 0.847); blank pages 168 -> 41
+##   - Decision: keep headers
+##
+## PHASE 2: model comparison (done)
+##   - 7 models on the same 10 splits, all ~80% accuracy
+##     (PCA+logistic, lasso, elastic net, ridge, lasso + bigrams, 2 SVMs)
+##   - Neural net skipped (Keras setup issues)
+##   - Decision: lasso on word TF-IDF
+##
+## PHASE 3: final model (done)
+##   - Cleaning keeps every page; parses doctype-less HTML too;
+##     non-HTML pages get fallback label N/A
+##   - Vocabulary + IDF learned from training pages only
+##   - Honest check (10 splits): accuracy 0.806, AUC 0.864,
+##     sensitivity 0.788, specificity 0.826
+##   - Refit on all 2,146 HTML pages -> results/bclass-model.rds (0.46 MB)
+##   - Test predictions: 929 pages, 499 N/A / 430 Relevant
+##     -> results/bclass-test-preds.RData
+##
+## NEXT: set up scripts/task4/ for Deliverables 3-4 hand-off
+## =====================================================================
+
