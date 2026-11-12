@@ -1,0 +1,95 @@
+This folder holds the primary task models and the script that produces our test-set predictions. Run everything from the project root (open `module2-claims.Rproj`).
+
+## Files
+
+| File | What it is | Owner |
+|------------------------|------------------------|------------------------|
+| `scripts/task4/headers-test.R` | Phase 1: tests paragraphs-only vs paragraphs + headers | Binary (4a) |
+| `scripts/task4/binary-model-development.R` | Model comparison, final fit, saves the binary model | Binary (4a) |
+| `scripts/task4/bclass-functions.R` | Cleaning, TF-IDF and `predict_bclass()` | Binary (4a) |
+| `results/bclass-model.rds` | Saved binary model (lasso) | Binary (4a) |
+| `scripts/task4/mclass-functions.R` | Defines `predict_mclass()` | **Multiclass (4b), to add** |
+| `results/mclass-model.rds` | Saved multiclass model | **Multiclass (4b), to add** |
+| `scripts/task4/predict-test.R` | Loads both models, predicts the test pages, saves `pred_df` | Shared |
+| `results/preds-group2.RData` | Final predictions (Deliverable 3), created by the script | Shared |
+
+## How to run
+
+Restart R, then source the prediction script:
+
+```{r, eval = FALSE}
+source('scripts/task4/predict-test.R')
+```
+
+It only saves `results/preds-group2.RData` when every check passes. Until the multiclass files exist, it warns and does not save.
+
+## multiclass side needs
+
+1.  **`results/mclass-model.rds`**: the fitted model, saved with `saveRDS()`. Include everything needed to score new pages (vocabulary, IDF weights, any PCA loadings, the fit itself).
+2.  **`scripts/task4/mclass-functions.R`**: defines `predict_mclass(model, df)`.
+
+`predict_mclass()` must follow this contract:
+
+- **Input:** a data frame with `.id` and `text_tmp` (raw HTML), like `claims_test`
+- **Output:** a tibble with `.id` and `mclass.pred`
+- **`mclass.pred`:** a factor with exactly these levels, in this order: `'N/A: No relevant content.'`, `'Physical Activity'`, `'Possible Fatality'`, `'Potentially unlawful activity'`, `'Other claim content'`
+- **One row per input page, no `NA`s.** Give pages you can't parse a fallback label instead of dropping them.
+
+A starting skeleton:
+
+```{r, eval = FALSE}
+# scripts/task4/mclass-functions.R
+predict_mclass <- function(model, .df){
+  cl <- clean_pages(.df)          # reuse the binary cleaning, or your own
+  # ... build features with your saved vocabulary / loadings ...
+  # ... predict with model$fit, take the most likely class ...
+  tibble(.id = cl$.id,
+         mclass.pred = factor(pred_labels, levels = model$levels))
+}
+```
+
+`clean_pages()`, `tokenize_pages()`, `build_vocab()` and `make_dtm()` are already loaded from `bclass-functions.R` when the prediction script runs, so you can reuse them.
+
+## N/A rule
+
+In the training data, `mclass` is N/A exactly when `bclass` is N/A. The script prints how many test pages the two models disagree on. Pick one rule and uncomment it in section 4 of `predict-test.R`:
+
+- **(a)** the binary model decides N/A
+- **(b)** the multiclass model decides N/A
+
+## Before submitting
+
+- [ ] Both model files are in `results/` and under 100 MB
+- [ ] `predict-test.R` runs top to bottom in a fresh R session
+- [ ] All checks print `TRUE` and the script says "Saved results/preds-group2.RData"
+- [ ] N/A rule chosen and uncommented
+- [ ] add notes for deliverable 2 here
+- [ ] push stuff to the git hub
+
+## Binary model at a glance
+
+- **Text:** paragraphs + headers (h1 to h6), cleaned; non-HTML pages get the N/A fallback
+- **Features:** word TF-IDF, words on 5+ training pages (about 6,800)
+- **Model:** lasso logistic regression (glmnet), penalty chosen by cross-validation
+- **Held-out performance (10 splits):** accuracy 0.806, ROC AUC 0.864, sensitivity 0.788, specificity 0.826
+
+# Binary model (task 4a): notes for Deliverable 2
+
+## Preprocessing
+
+Paragraph and header (h1-h6) text was scraped from each page's HTML, then cleaned: URLs, emails, punctuation, digits and symbols removed; lowercased; stop words removed; words lemmatized. Pages that weren't HTML (JSON, PDFs, scraper errors) get the fallback label N/A. Text was represented as TF-IDF over words appearing on at least 5 training pages (about 6,800 words).
+
+## Method
+
+Lasso logistic regression (glmnet, alpha = 1), with the penalty chosen by 10-fold cross-validation. Chosen after comparing 7 models on the same 10 random 80/20 splits: PCA logistic regression (in-class baseline), lasso, elastic net, ridge, lasso with bigrams, and two RBF SVMs. All reached about 80% accuracy; lasso tied for best and was the simplest to deploy. The final model was refit on all 2,146 HTML training pages.
+
+## Results (held-out, mean over 10 splits; positive class = Relevant)
+
+| Metric      | Value |
+|-------------|-------|
+| Sensitivity | 0.788 |
+| Specificity | 0.826 |
+| Accuracy    | 0.806 |
+| ROC AUC     | 0.864 |
+
+Comparison: baseline PCA logistic regression reached 0.800 accuracy. Adding headers left accuracy unchanged but raised AUC (0.864 vs 0.847). Neural networks were not pursued (software setup issues).
