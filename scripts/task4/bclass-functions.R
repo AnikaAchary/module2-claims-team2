@@ -43,10 +43,11 @@ parse_fn2 <- function(.html, .css = 'p'){
 # clean EVERY page in a data frame with a text_tmp column
 # - pages containing '<!' or '<html' are parsed as HTML
 # - anything else (JSON, PDFs, scraper errors) gets empty text and parsed = FALSE
+# - pages with missing HTML (NA) are treated as unparsed
 # - no page is ever dropped
 clean_pages <- function(.df, .css = css_headers){
   .df %>%
-    mutate(parsed = str_detect(text_tmp, regex('<!|<html', ignore_case = TRUE))) %>%
+    mutate(parsed = coalesce(str_detect(text_tmp, regex('<!|<html', ignore_case = TRUE)), FALSE)) %>%
     rowwise() %>%
     mutate(text_clean = if (parsed) {
       tryCatch(parse_fn2(text_tmp, .css), error = function(e) '')
@@ -119,3 +120,21 @@ predict_bclass <- function(model, .df){
          bclass.prob = p,
          bclass.pred = factor(lab, levels = model$levels))
 }
+
+
+## =====================================================================
+## BINARY MODEL FUNCTIONS (task 4a)
+## Turns raw HTML pages into bclass predictions using the saved lasso
+## model (results/bclass-model.rds). Holds the cleaning, TF-IDF and
+## prediction steps in one place, so training and prediction always
+## process pages the same way.
+##
+## Main function: predict_bclass(model, df)
+##   in:  data frame with .id and text_tmp (raw HTML)
+##   out: .id, bclass.prob, bclass.pred (factor, claims_raw levels)
+##   non-HTML or missing pages get the fallback label N/A
+##
+## Sourced by: scripts/task4/binary-model-development.R
+##             scripts/task4/predict-test.R
+## =====================================================================
+
