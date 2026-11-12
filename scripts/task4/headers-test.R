@@ -182,6 +182,16 @@ results %>%
   pivot_wider(names_from = .metric, values_from = .estimate)
 
 
+## RESULT (seed 102926, 80/20 split, 428 test pages)
+##   paragraphs only: accuracy 0.786, sens 0.760, spec 0.814, AUC 0.859 (107 PCs)
+##   paragraphs + headers:accuracy 0.795, sens 0.791, spec 0.799, AUC 0.866 (193 PCs)
+## Headers give a small gain: +0.9 pts accuracy, +0.007 AUC.
+## They catch more relevant pages (sens +3.1) but slightly fewer N/A pages (spec -1.5).
+## The gain is about 4 test pages, so it could be split noise:
+## confirm across several seeds before deciding.
+
+
+
 
 file.size('data/claims-clean-headers-test.RData') / 1e6   # MB
 file.size('data/tfidf-headers-test.RData') / 1e6
@@ -190,8 +200,47 @@ claims_p  <- select(claims_p,  -text_tmp)
 claims_ph <- select(claims_ph, -text_tmp)
 save(claims_p, claims_ph, file = 'data/claims-clean-headers-test.RData')
 
+## repeat over several splits ---------------------------------------------
+
+run_seed <- function(s){
+  # new train/test pages for this seed, shared by both versions
+  set.seed(s)
+  sp <- tfidf_p %>%
+    select(.id, bclass) %>%
+    initial_split(prop = 0.8, strata = bclass)
+  tr <- training(sp)$.id
+  te <- testing(sp)$.id
+  
+  bind_rows(
+    fit_pcr(tfidf_p,  tr, te) %>% mutate(version = 'paragraphs'),
+    fit_pcr(tfidf_ph, tr, te) %>% mutate(version = 'headers')
+  ) %>%
+    mutate(seed = s)
+}
+
+multi <- map_dfr(1:10, run_seed)   # 20 model fits: this may take 10-20 minutes
+save(multi, file = 'data/headers-test-seeds.RData')
 
 
+multi %>%
+  filter(.metric %in% c('accuracy', 'roc_auc')) %>%
+  select(seed, version, .metric, .estimate) %>%
+  pivot_wider(names_from = version, values_from = .estimate) %>%
+  mutate(diff = headers - paragraphs) %>%
+  group_by(.metric) %>%
+  summarise(mean_paragraphs = mean(paragraphs),
+            mean_headers    = mean(headers),
+            mean_diff       = mean(diff),
+            sd_diff         = sd(diff),
+            headers_wins    = sum(diff > 0),
+            n_seeds         = n())
+
+
+## RESULT over 10 random 80/20 splits (seeds 1-10)
+##   accuracy: paragraphs 0.793 vs headers 0.791 (diff -0.002, sd 0.015, headers win 4/10)
+##   ROC AUC:  paragraphs 0.847 vs headers 0.864 (diff +0.018, sd 0.014, headers win 8/10)
+## Headers: no change in accuracy at the 0.5 cutoff, consistently better AUC.
+## Decision: include headers (h1-h6) in cleaning for the binary model.
 
 
 
