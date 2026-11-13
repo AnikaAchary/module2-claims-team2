@@ -10,24 +10,35 @@ library(tensorflow)
 
 ## DATA
 
-# swap with header version once task 1 is pushed to compare against PCR
+# match task 1's split exactly
 load('data/claims-clean-example.RData')
+pages <- claims_clean %>% ungroup()
 
-# same partition as starter code
-set.seed(110122)
-partitions <- claims_clean %>%
-  initial_split(prop = 0.8)
+# sanity check: same pages in the same order as task 1
+task1_ids <- claims_clean %>% filter(str_detect(text_tmp, '<!')) %>% pull(.id)
+stopifnot(identical(pages$.id, task1_ids))
 
-# shuffle training rows so keras's validation_split doesn't end up 
-# with a weird chunk of the data (takes last 20% of rows)
-train_df <- training(partitions) %>% slice_sample(prop = 1)
-test_df <- testing(partitions)
+set.seed(197)
+split_indices <- split(seq_len(nrow(pages)), pages$bclass)
+train <- unlist(lapply(split_indices, function(i) sample(i, floor(.6 * length(i)))))
+remaining <- lapply(split_indices, function(i) setdiff(i, train))
+validation <- unlist(lapply(remaining, function(i) sample(i, floor(length(i) / 2))))
+test <- setdiff(seq_len(nrow(pages)), c(train, validation))
 
-train_text <- train_df %>% pull(text_clean)
+train_df <- pages[train, ]
+val_df   <- pages[validation, ]
+test_df  <- pages[test, ]
+
+train_text   <- train_df %>% pull(text_clean)
 train_labels <- train_df %>% pull(bclass) %>% as.numeric() - 1
 
-test_text <- test_df %>% pull(text_clean)
+val_text   <- val_df %>% pull(text_clean)
+val_labels <- val_df %>% pull(bclass) %>% as.numeric() - 1
+
+test_text   <- test_df %>% pull(text_clean)
 test_labels <- test_df %>% pull(bclass)
+
+val_x <- tf$constant(matrix(val_text, ncol = 1))
 
 train_x <- tf$constant(matrix(train_text, ncol = 1))
 test_x  <- tf$constant(matrix(test_text, ncol = 1))
@@ -77,7 +88,7 @@ model %>% compile(
 history <- model %>%
   fit(train_x,
       train_labels,
-      validation_split = 0.2,
+      validation_data = list(val_x, val_labels),
       epochs = 30,
       callbacks = list(
         callback_early_stopping(monitor = 'val_loss',
@@ -106,7 +117,7 @@ results %>% roc_auc(truth = truth, prob, event_level = 'second')
 
 ## SAVE
 
-save_model(model, 'results/task3-nn.keras')
+save_model(model, 'results/task3-nn.keras', overwrite = TRUE)
 
 # later, load with:
 # load_model('results/task3-nn.keras')
