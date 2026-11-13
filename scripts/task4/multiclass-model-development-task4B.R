@@ -108,3 +108,25 @@ results_m %>%
 ##   lasso vs elastic net is within split noise (sd ~0.012)
 ## DECISION: multinomial lasso (same method as the binary model)
 ## N/A vs not accuracy 0.786 < binary 0.806 -> use rule (a) in predict-test.R
+
+## REFIT + SAVE --------------------------------------------------------------
+train_fit   <- train_clean %>% filter(parsed) %>% arrange(.id)   # 2,146 HTML pages
+tok_fit     <- tok %>% filter(.id %in% train_fit$.id)
+vocab_final <- build_vocab(tok_fit, n_pages = nrow(train_fit))
+x_all       <- make_dtm(tok_fit, train_fit$.id, vocab_final)
+dim(x_all)
+
+set.seed(67)
+cv_final <- cv.glmnet(x = x_all, y = train_fit$mclass, family = "multinomial", alpha = 1)
+
+mclass_model <- list(
+  css      = css_headers,
+  vocab    = vocab_final,
+  fit      = cv_final,
+  lambda   = cv_final$lambda.min,
+  levels   = mlv,
+  fallback = mlv[1]   # non-HTML pages -> N/A
+)
+
+saveRDS(mclass_model, file = "results/mclass-model.rds")
+file.size("results/mclass-model.rds") / 1e6   # MB
