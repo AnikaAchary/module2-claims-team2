@@ -84,21 +84,21 @@ pred_df <- claims_test %>%
 ##   - Keep the '##' comment lines and the other rule commented out
 ##   - Restart R and rerun this script; all checks should print TRUE
 ##
-## NOTE: rule (a) only fixes one direction (binary says N/A ->
-##   multiclass set to N/A). If the binary model says Relevant but the
-##   multiclass model says N/A, mclass.pred stays N/A.
 ## ---------------------------------------------------------------------
 na_label <- bclass_levels[1]
 disagree <- sum((pred_df$bclass.pred == na_label) != (pred_df$mclass.pred == na_label),
                 na.rm = TRUE)
 message('Pages where the two models disagree on N/A: ', disagree)
 
-## (a) binary model decides N/A: when it says N/A, set mclass.pred to N/A too
-# pred_df <- pred_df %>%
-#   mutate(mclass.pred = if_else(bclass.pred == na_label,
-#                                factor(na_label, levels = mclass_levels),
-#                                mclass.pred))
-
+## (a) binary model decides N/A; multiclass picks the claim type
+mclass_rel <- predict_mclass_relevant(mclass_model, claims_test)
+pred_df <- pred_df %>%
+  left_join(mclass_rel, by = ".id") %>%
+  mutate(mclass.pred = if_else(bclass.pred == na_label,
+                               factor(na_label, levels = mclass_levels),
+                               mclass.relevant)) %>%
+  select(-mclass.relevant)
+  
 ## (b) multiclass model decides N/A: set bclass.pred from mclass.pred
 # pred_df <- pred_df %>%
 #   mutate(bclass.pred = factor(if_else(mclass.pred == na_label,
