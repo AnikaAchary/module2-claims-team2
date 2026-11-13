@@ -8,7 +8,11 @@ date: today
 
 Provide a 3-5 sentence summary of your work on the primary task. Indicate what input data was used, what method was used for binary class predictions, what method was used for multiclass predictions, and what estimated accuracies were achieved.
 
-> *Header and paragraph content was scraped from the raw webpages and processed into term frequencies of word tokens. For binary classification, a two-layer neural network yielded an estimated 81.4% accuracy; for multiclass classification, a support vector machine gave 78% accuracy.*
+For the primary task, we used 2140 valid labeled webpages from claims_raw.RData and evaluated them in versions of just having paragraphs (claims_p) and paragraphs with headers (claims_ph). For the binary classification, we evaluated principal component analysis and logistic regression alongside Lasso, elastic net, and Ridge models on TF-IDF features across 10 80/20 training/test splits. As a result, the PCA and logistic regression had an estimated accuracy of 80%, lasso with 80.5%, elastic net with 80.3%, and ridge with 79.4%. For multiclass predictions, we ran 10 80/20 training/test splits on PCA, lasso, and elastic net regression. Eventually, we chose the best performing lasso model with 0.771 accuracy and 0.617 macro sensitivity.  
+
+
+
+
 
 ### Preprocessing
 
@@ -19,6 +23,11 @@ In one paragraph lay out your preprocessing pipeline. No need to provide exact s
 -   how text was cleaned
 
 -   how cleaned text was represented quantitatively
+
+In order to prepare the raw HTML pages for modeling, we first extracted text from both paragraphs ('p') and headers (h1, h2, h3, h4, h5, h6) using the given parse_data and parse_fn functions from preprocessing, which resulted in the headers cutting the number of blank pages from 168 to 41, and median words went from 223- 281. These functions extracted the text by removing URLs, emails, punctuation, digits, nbsp (HTML entities), and symbols. They also concatenated camelCase (words joined together without spaces or punctuation) words, lowercased all characters and collapsed unnecessary white space. Pages that were not HTML (JSON, PDFs, scraper errors) were given the fallback label N/A. Then, we used the nlp_fn function to tokenize the cleaned text into single words, filtered for stopwords and lemmatized with the textstem library. We restricted lemmas longer than 2 characters appearing in at least 5 documents (about 6,800 words), and they were represented quantitatively as a TF-IDF matrix. Pages that weren't HTML (JSON, PDFs, scraper errors) get the fallback label N/A. 
+
+
+
 
 ### Methods
 
