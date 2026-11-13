@@ -5,11 +5,13 @@ This folder holds the primary task models and the script that produces our test-
 | File | What it is | Owner |
 |------------------------|------------------------|------------------------|
 | `scripts/task4/headers-test.R` | Phase 1: tests paragraphs-only vs paragraphs + headers | Binary (4a) |
-| `scripts/task4/binary-model-development.R` | Model comparison, final fit, saves the binary model | Binary (4a) |
+| `scripts/task4/binary-model-development-task4A.R` | Model comparison, final fit, saves the binary model | Binary (4a) |
 | `scripts/task4/bclass-functions.R` | Cleaning, TF-IDF and `predict_bclass()` | Binary (4a) |
 | `results/bclass-model.rds` | Saved binary model (lasso) | Binary (4a) |
-| `scripts/task4/mclass-functions.R` | Defines `predict_mclass()` | **Multiclass (4b), to add** |
-| `results/mclass-model.rds` | Saved multiclass model | **Multiclass (4b), to add** |
+| `scripts/task4/multiclass-model-development-task4B.R` | Model comparison, final fit, saves the multiclass model | Multiclass (4b) |
+| `scripts/task4/mclass-functions.R` | Defines `predict_mclass()` and `predict_mclass_relevant()` | Multiclass (4b) |
+| `results/multiclass-comparison.RData` | 10-split comparison results | Multiclass (4b) |
+| `results/mclass-model.rds` | Saved multiclass model (lasso) | Multiclass (4b) |
 | `scripts/task4/predict-test.R` | Loads both models, predicts the test pages, saves `pred_df` | Shared |
 | `results/preds-group2.RData` | Final predictions (Deliverable 3), created by the script | Shared |
 
@@ -57,13 +59,15 @@ In the training data, `mclass` is N/A exactly when `bclass` is N/A. The script p
 - **(a)** the binary model decides N/A
 - **(b)** the multiclass model decides N/A
 
+**Chosen: rule (a).** Multiclass N/A-vs-not accuracy was 0.786, below the binary model's 0.806, so the binary model decides N/A. Rule (a) was extended to cover both directions: when the binary model says Relevant but the multiclass model says N/A, `mclass.pred` is set to the multiclass model's most likely non-N/A class (`predict_mclass_relevant()`). This fixed 108 test pages where the two columns disagreed (30 one way, 78 the other), so `pred_df` now has no contradictions.
+
 ## Before submitting
 
-- [ ] Both model files are in `results/` and under 100 MB
-- [ ] `predict-test.R` runs top to bottom in a fresh R session
-- [ ] All checks print `TRUE` and the script says "Saved results/preds-group2.RData"
-- [ ] N/A rule chosen and uncommented
-- [ ] add notes for deliverable 2 here
+- [x] Both model files are in `results/` and under 100 MB
+- [x] `predict-test.R` runs top to bottom in a fresh R session
+- [x] All checks print `TRUE` and the script says "Saved results/preds-group2.RData"
+- [x] N/A rule chosen and uncommented
+- [x] add notes for deliverable 2 here
 - [ ] push stuff to the git hub
 
 ## Binary model at a glance
@@ -93,3 +97,30 @@ Lasso logistic regression (glmnet, alpha = 1), with the penalty chosen by 10-fol
 | ROC AUC     | 0.864 |
 
 Comparison: baseline PCA logistic regression reached 0.800 accuracy. Adding headers left accuracy unchanged but raised AUC (0.864 vs 0.847). Neural networks were not pursued (software setup issues).
+
+## Multiclass model at a glance
+
+- **Text and features:** same as the binary model (paragraphs + headers, word TF-IDF on words appearing on 5+ training pages, about 6,800 words)
+- **Model:** multinomial lasso regression (glmnet), penalty chosen by cross-validation
+- **Held-out performance (10 splits):** accuracy 0.779, macro sensitivity 0.662, macro specificity 0.927
+
+# Multiclass model (task 4b): notes for Deliverable 2
+
+## Preprocessing
+
+Same pipeline and TF-IDF features as the binary model. Pages that weren't HTML get the fallback label N/A.
+
+## Method
+
+Multinomial lasso regression (glmnet, alpha = 1) over the 5 classes, with the penalty chosen by 10-fold cross-validation. Chosen after comparing 3 models on the same 10 random 80/20 splits (stratified by class): PCA multinomial regression (in-class baseline), lasso and elastic net. Lasso and elastic net tied (difference within split noise); lasso was chosen to match the binary model. The final model was refit on all 2,146 HTML training pages. For the test predictions, the binary model decides N/A vs relevant and the multiclass model picks the claim type (see N/A rule above).
+
+## Results (held-out, mean over 10 splits; sensitivity and specificity macro-averaged over the 5 classes)
+
+| Metric      | Value |
+|-------------|-------|
+| Sensitivity | 0.662 |
+| Specificity | 0.927 |
+| Accuracy    | 0.779 |
+
+Comparison: baseline PCA multinomial regression reached 0.771 accuracy and 0.617 macro sensitivity. Sensitivity is lowest for the smallest class ("Other claim content", 100 training pages, 0.27) and highest for N/A and Possible Fatality (0.85).
+
