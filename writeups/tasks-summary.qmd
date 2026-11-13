@@ -1,6 +1,6 @@
 ---
 title: "Summary of exploratory tasks"
-author: 'YOUR NAMES HERE'
+author: 'Anika Achary, Chris Zaragoza, Laiyee Ke, Praveen Arunshankar, Ryan Chang'
 date: today
 ---
 
@@ -14,15 +14,11 @@ Do bigrams capture additional information relevant to the classification of inte
 
 Yes, bigrams do capture statistically significant additional information relevant to the classfication of interest beyond the scope of unigram frequencies. I reached this outcome by performing a two staged logistic principal component regression on claims_clean, which is a lemmatized and stopword filtered webpage text. For the first stage, I tokenized the text into unigrams and used a trimmed document feature matrix to determine the top 20 principal components, and used them to fit a logistic regression model predicting binary claim status (bclass) and baseline log-odd ratios as log_odds_stage1. Then, I tokenized the text into bigrams, did the same filtering and PCA analysis, getting the top 20 components and fit them on a logistic regression model predicting the bclass based on the unigram log odds and 20 bigram principal components. As a result of this analysis, I discovered that after conditioning on the unigram log odds, there were 8 out of 20 bigram principal compoenents that were statistically significant at the alpha level of 0.05. Additionally, the log_odds_stage1 dropped from 1 to 0.882 in this model, which shows that these bigram components contained new and useful information to the model. The bigram components also lowered the reduced residual deviance from 2694.6 on 1955 degrees of freedom to 2315.7 on 1934 degrees of freedom, leading to a better model fit with the bigrams added.
 
-
 ### Neural net
 
-Summarize the neural network model you trained by desribing:
+I trained a feedforward neural network on the paragraph text from claims_clean. Each page is converted to a TF-IDF vector over the 20,000 most frequent unigrams and bigrams, then passed through a dropout layer (rate 0.3), one hidden layer with 64 ReLU units, a second dropout layer (0.3), and a single sigmoid output unit that gives the probability of the positive class.
 
--   architecture
+To make the comparison with task 1 direct, I used the same stratified 60/20/20 train/validation/test split. The model was trained with the Adam optimizer (learning rate 0.001) on binary cross-entropy loss. I allowed up to 30 epochs with early stopping on validation loss (patience of 3) and kept the weights from the best epoch, which was epoch 3.
 
--   optimization and loss
+On the held-out test set, the network reached 79.5% accuracy (sensitivity 77.5%, specificity 81.3%, ROC AUC 87.0%), compared to 75.99% for logistic PCR on the same paragraph-only text and test split. Thus, the neural network outperformed the PCR model.
 
--   training epochs
-
--   predictive accuracy
