@@ -6,10 +6,9 @@ require(qdapRegex)
 require(stopwords)
 require(tokenizers)
 
-# function to parse html and clean text
-parse_fn <- function(.html){
+parse_fn <- function(.html, tags = 'p'){
   read_html(.html) %>%
-    html_elements('p, h1, h2, h3, h4, h5, h6') %>%
+    html_elements(tags) %>%
     html_text2() %>%
     str_c(collapse = ' ') %>%
     rm_url() %>%
@@ -26,38 +25,7 @@ parse_fn <- function(.html){
     str_replace_all("\\s+", " ")
 }
 
-# function to apply to claims data
-parse_data <- function(.df){
-  out <- .df %>%
-    filter(str_detect(text_tmp, '<!')) %>%
-    rowwise() %>%
-    mutate(text_clean = parse_fn(text_tmp)) %>%
-    unnest(text_clean) 
-  return(out)
-}
-
-nlp_fn <- function(parse_data.out){
-  out <- parse_data.out %>% 
-    unnest_tokens(output = token, 
-                  input = text_clean, 
-                  token = 'words',
-                  stopwords = str_remove_all(stop_words$word, 
-                                             '[[:punct:]]')) %>%
-    mutate(token.lem = lemmatize_words(token)) %>%
-    filter(str_length(token.lem) > 2) %>%
-    count(.id, bclass, token.lem, name = 'n') %>%
-    bind_tf_idf(term = token.lem, 
-                document = .id,
-                n = n) %>%
-    pivot_wider(id_cols = c('.id', 'bclass'),
-                names_from = 'token.lem',
-                values_from = 'tf_idf',
-                values_fill = 0)
-  return(out)
-}
-
 load('data/claims-raw.RData')
-dir.create('results/part1', recursive = TRUE, showWarnings = FALSE)
 
 pages <- claims_raw %>% filter(str_detect(text_tmp, '<!')) %>% ungroup()
 set.seed(197)
@@ -69,11 +37,10 @@ test <- setdiff(seq_len(nrow(pages)), c(train, validation))
 y <- as.integer(pages$bclass == 'Relevant claim content')
 stopifnot(length(unique(y)) == 2)
 
-paragraph_parser <- new.env()
-sys.source('scripts/preprocessing.R', envir = paragraph_parser)
 texts <- list(
-  'Paragraphs only' = map_chr(pages$text_tmp, paragraph_parser$parse_fn),
-  'Paragraphs + headings' = map_chr(pages$text_tmp, parse_fn)
+  'Paragraphs only' = map_chr(pages$text_tmp, parse_fn),
+  'Paragraphs + headings' = map_chr(pages$text_tmp, parse_fn,
+                                  tags = 'p, h1, h2, h3, h4, h5, h6')
 )
 
 grid <- c(5, 10, 20, 30, 50)
@@ -98,7 +65,6 @@ for (strategy in names(texts)) {
   x <- matrix(0, length(text), nrow(vocabulary))
   x[cbind(weighted$doc, match(weighted$term, vocabulary$term))] <-
     weighted$tf * weighted$idf
-  # Centered PCA, without scaling sparse word features to unit variance.
   pca <- prcomp(x[train, , drop = FALSE], center = TRUE,
                 scale. = FALSE, rank. = max(grid))
   scores <- as.data.frame(predict(pca, x))
@@ -118,7 +84,6 @@ for (strategy in names(texts)) {
 }
 metrics <- bind_rows(metrics)
 
-# Display the results directly; no table function is needed.
 accuracy_table <- metrics %>%
   gt::gt() %>%
   gt::tab_header(title = 'Binary prediction accuracy: logistic PCR') %>%
@@ -126,4 +91,3 @@ accuracy_table <- metrics %>%
                  accuracy = 'Test accuracy') %>%
   gt::fmt_percent(accuracy, decimals = 2)
 print(accuracy_table)
-gt::gtsave(accuracy_table, 'results/part1/accuracy-table.html')

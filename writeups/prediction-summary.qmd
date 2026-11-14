@@ -1,36 +1,15 @@
 ---
 title: "Predictive modeling of claims status"
-author: 'YOUR NAMES HERE'
+author: 'Anika Achary, Chris Zaragoza, Laiyee Ke, Praveen Arunshankar, Ryan Chang'
 date: today
 ---
 
 ### Abstract
 
-Provide a 3-5 sentence summary of your work on the primary task. Indicate what input data was used, what method was used for binary class predictions, what method was used for multiclass predictions, and what estimated accuracies were achieved.
-
 For the primary task, we used 2140 valid labeled webpages from claims_raw.RData and evaluated them in versions of just having paragraphs (claims_p) and paragraphs with headers (claims_ph). For the binary classification, we evaluated principal component analysis and logistic regression alongside Lasso, elastic net, and Ridge models on TF-IDF features across 10 80/20 training/test splits. As a result, the PCA and logistic regression had an estimated accuracy of 80%, lasso with 80.5%, elastic net with 80.3%, and ridge with 79.4%. For multiclass predictions, we ran 10 80/20 training/test splits on PCA, lasso, and elastic net regression. Eventually, we chose the best performing lasso model with 0.779 accuracy and 0.662 macro sensitivity.
 
 ### Preprocessing
-
-In one paragraph lay out your preprocessing pipeline. No need to provide exact step-by-step detail; just give an overview of the main components:
-
-- what text content was extracted from HTML
-
-- how text was cleaned
-
-- how cleaned text was represented quantitatively
-
 In order to prepare the raw HTML pages for modeling, we first extracted text from both paragraphs ('p') and headers (h1, h2, h3, h4, h5, h6) using the given parse_data and parse_fn functions from preprocessing, which resulted in the headers cutting the number of blank pages from 168 to 41, and median words went from 223- 281. These functions extracted the text by removing URLs, emails, punctuation, digits, nbsp (HTML entities), and symbols. They also concatenated camelCase (words joined together without spaces or punctuation) words, lowercased all characters and collapsed unnecessary white space. Pages that were not HTML (JSON, PDFs, scraper errors) were given the fallback label N/A. Then, we used the nlp_fn function to tokenize the cleaned text into single words, filtered for stopwords and lemmatized with the textstem library. We restricted lemmas longer than 2 characters appearing in at least 5 documents (about 6,800 words), and they were represented quantitatively as a TF-IDF matrix. Pages that weren't HTML (JSON, PDFs, scraper errors) get the fallback label N/A.
-
-### Methods
-
-Describe your final predictive models. Include one paragraph with details on the binary classification approach, and one on the multiclass approach. Include for each:
-
-- what ML/statistical method was used
-
-- model specification and hyperparameter selection
-
-- training method
 
 ### Methods
 
@@ -40,6 +19,53 @@ Describe your final predictive models. Include one paragraph with details on the
 
 ### Results
 
-Indicate the predictive accuracy of the binary classifications and the multiclass classifications. Provide a table for each, and report sensitivity, specificity, and accuracy.[^1]
+For binary classification, our final lasso model reached an average accuracy of 80.6% across 10 random 80/20 training/test splits, with sensitivity of 78.8% and specificity of 82.6%. The model correctly identified 78.8% of relevant pages and 82.6% of pages with no relevant content. The vocabulary and IDF weights were learned from the training pages in each split. Compared to the PCA and logistic regression baseline at 80.0% accuracy, lasso gave a small improvement, with the difference being within the variation across splits.
 
-[^1]: Read [this article](https://yardstick.tidymodels.org/articles/multiclass.html) on multiclass averaging.
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+results_dir <- if (dir.exists("../results")) "../results" else "results"
+binary_results <- new.env()
+load(file.path(results_dir, "bclass-honest-check.RData"),
+     envir = binary_results)
+binary_means <- with(binary_results$honest, tapply(.estimate, .metric, mean))
+
+data.frame(
+  Model = "Lasso logistic regression",
+  Sensitivity = unname(binary_means["sensitivity"]),
+  Specificity = unname(binary_means["specificity"]),
+  Accuracy = unname(binary_means["accuracy"])
+) |>
+  gt::gt() |>
+  gt::tab_header(title = "Binary classification results") |>
+  gt::fmt_percent(columns = c(Sensitivity, Specificity, Accuracy), decimals = 1) 
+```
+
+For multiclass classification, the multinomial lasso model reached an average accuracy of 77.9%, with macro sensitivity of 66.2% and macro specificity of 92.7% across 10 random 80/20 training/test splits. Compared to the PCA and multinomial regression baseline, accuracy increased from 77.1% to 77.9%, and macro sensitivity increased from 61.7% to 66.2%. Elastic net had a slightly higher accuracy of 78.1%, but the difference was within the variation across splits, so we chose lasso for consistency with the binary model.
+
+We used macro averages so that each class contributes equally to sensitivity and specificity, including the smaller classes. Accuracy is the overall proportion of correctly classified pages and does not require this averaging.
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+multiclass_results <- new.env()
+load(file.path(results_dir, "multiclass-comparison.RData"),
+     envir = multiclass_results)
+lasso_results <- subset(multiclass_results$results_m,
+                        model == "multinomial lasso")
+multiclass_means <- with(lasso_results, tapply(.estimate, .metric, mean))
+
+data.frame(
+  Model = "Multinomial lasso regression",
+  Sensitivity = unname(multiclass_means["sensitivity"]),
+  Specificity = unname(multiclass_means["specificity"]),
+  Accuracy = unname(multiclass_means["accuracy"])
+) |>
+  gt::gt() |>
+  gt::tab_header(title = "Multiclass classification results") |>
+  gt::cols_label(Sensitivity = "Macro sensitivity",
+                 Specificity = "Macro specificity") |>
+  gt::fmt_percent(columns = c(Sensitivity, Specificity, Accuracy), decimals = 1) 
+```

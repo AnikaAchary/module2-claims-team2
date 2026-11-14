@@ -5,12 +5,11 @@ date: today
 ---
 
 ### HTML scraping
+Including header content resulted in a small improvement in binary prediction accuracy; we extracted headers (h1, h2, h3, h4, h5 h6) with paragraph text and compared paragraph-only text using logistic principal component regression. Both versions used the same 60/20/20 training/validation/test split, and the number of principal components was chosen using validation accuracy. Accuracy increased from 75.99% with paragraphs only to 76.69% with paragraphs and headers, an slight improvement of 0.70%.
 
-Does including header content improve predictions? Answer the question and provide quantitative evidence supporting your answer.
+We also compared the two versions using regularized logistic regression on principal components across 10 random 80/20 training/test splits. Average accuracy was similar at 79.3% for paragraphs only and 79.1% with headers, while ROC AUC increased from 0.847 to 0.864 (higher with headers in 8 of the 10 splits). Overall, headers did not consistently improve accuracy at the 50% cutoff, but they helped the model distinguish relevant from irrelevant pages slightly.
 
 ### Bigrams
-
-Do bigrams capture additional information relevant to the classification of interest? Answer the question, **briefly** describe what analysis you conducted to arrive at your answer, and provide quantitative evidence supporting your answer.
 
 Yes, bigrams do capture statistically significant additional information relevant to the classfication of interest beyond the scope of unigram frequencies. I reached this outcome by performing a two staged logistic principal component regression on claims_clean, which is a lemmatized and stopword filtered webpage text. For the first stage, I tokenized the text into unigrams and used a trimmed document feature matrix to determine the top 20 principal components, and used them to fit a logistic regression model predicting binary claim status (bclass) and baseline log-odd ratios as log_odds_stage1. Then, I tokenized the text into bigrams, did the same filtering and PCA analysis, getting the top 20 components and fit them on a logistic regression model predicting the bclass based on the unigram log odds and 20 bigram principal components. As a result of this analysis, I discovered that after conditioning on the unigram log odds, there were 8 out of 20 bigram principal compoenents that were statistically significant at the alpha level of 0.05. Additionally, the log_odds_stage1 dropped from 1 to 0.882 in this model, which shows that these bigram components contained new and useful information to the model. The bigram components also lowered the reduced residual deviance from 2694.6 on 1955 degrees of freedom to 2315.7 on 1934 degrees of freedom, leading to a better model fit with the bigrams added.
 
